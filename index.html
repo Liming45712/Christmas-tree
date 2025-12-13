@@ -549,14 +549,64 @@
                 runningMode: "VIDEO", numHands: 1
             });
             const video = document.getElementById("input-video");
-            navigator.mediaDevices.getUserMedia({ video: true }).then((stream) => {
-                video.srcObject = stream;
-                video.addEventListener("loadeddata", () => {
+            
+            // 检查浏览器支持
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('status-text').innerText = "您的浏览器不支持摄像头功能";
+                return;
+            }
+            
+            // 移动端友好的视频约束配置
+            const videoConstraints = {
+                video: {
+                    facingMode: 'user', // 使用前置摄像头
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 },
+                    // 移动端兼容性设置
+                    aspectRatio: { ideal: 16/9 }
+                }
+            };
+            
+            navigator.mediaDevices.getUserMedia(videoConstraints)
+                .then((stream) => {
+                    video.srcObject = stream;
+                    video.addEventListener("loadeddata", () => {
+                        document.getElementById('loading').style.display = 'none';
+                        document.getElementById('status-text').innerText = "系统就绪，请伸手";
+                        predictWebcam(handLandmarker, video);
+                    });
+                })
+                .catch((error) => {
+                    console.error('摄像头访问错误:', error);
                     document.getElementById('loading').style.display = 'none';
-                    document.getElementById('status-text').innerText = "系统就绪，请伸手";
-                    predictWebcam(handLandmarker, video);
+                    
+                    let errorMessage = "无法访问摄像头";
+                    if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+                        errorMessage = "请允许访问摄像头权限";
+                    } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+                        errorMessage = "未找到摄像头设备";
+                    } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+                        errorMessage = "摄像头被其他应用占用";
+                    } else if (error.name === 'OverconstrainedError' || error.name === 'ConstraintNotSatisfiedError') {
+                        errorMessage = "摄像头不支持所需设置，尝试使用默认设置";
+                        // 尝试使用更简单的约束
+                        navigator.mediaDevices.getUserMedia({ video: true })
+                            .then((stream) => {
+                                video.srcObject = stream;
+                                video.addEventListener("loadeddata", () => {
+                                    document.getElementById('loading').style.display = 'none';
+                                    document.getElementById('status-text').innerText = "系统就绪，请伸手";
+                                    predictWebcam(handLandmarker, video);
+                                });
+                            })
+                            .catch((fallbackError) => {
+                                document.getElementById('status-text').innerText = "摄像头初始化失败: " + fallbackError.message;
+                            });
+                        return;
+                    }
+                    document.getElementById('status-text').innerText = errorMessage;
                 });
-            });
         }
  
         let lastVideoTime = -1;
