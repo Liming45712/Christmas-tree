@@ -634,13 +634,51 @@
                     wasmPath = '/node_modules/@mediapipe/tasks-vision/wasm';
                 } else {
                     // 生产模式：使用复制到 dist/wasm 的文件
-                    // 获取当前页面的 base 路径（考虑 GitHub Pages 的子路径）
-                    const currentPath = window.location.pathname;
-                    // 移除文件名（如 index.html），只保留目录路径
-                    const basePath = currentPath.replace(/\/[^/]*$/, '') || '/';
-                    wasmPath = basePath + '/wasm';
+                    // 使用 import.meta.url 获取当前脚本的路径，然后计算相对路径
+                    try {
+                        const scriptUrl = new URL(import.meta.url);
+                        // 获取脚本所在目录（通常是 assets/）
+                        const scriptDir = scriptUrl.pathname.substring(0, scriptUrl.pathname.lastIndexOf('/'));
+                        // 回到 dist 根目录，然后进入 wasm 目录
+                        const distRoot = scriptDir.substring(0, scriptDir.lastIndexOf('/'));
+                        wasmPath = distRoot + '/wasm';
+                        console.log('使用 import.meta.url 计算的 WASM 路径:', wasmPath);
+                    } catch (e) {
+                        // 如果 import.meta.url 不可用，使用 window.location
+                        console.warn('无法使用 import.meta.url，回退到 window.location:', e);
+                        const currentPath = window.location.pathname;
+                        let basePath = currentPath.replace(/\/[^/]*\.html?$/, '').replace(/\/$/, '') || '';
+                        if (!basePath.startsWith('/')) {
+                            basePath = '/' + basePath;
+                        }
+                        wasmPath = basePath + (basePath === '/' ? 'wasm' : '/wasm');
+                        console.log('使用 window.location 计算的 WASM 路径:', wasmPath);
+                    }
                 }
-                console.log('MediaPipe WASM 路径:', wasmPath, { isDev: import.meta.env.DEV, currentPath: window.location.pathname });
+                
+                console.log('MediaPipe WASM 路径:', wasmPath, { 
+                    isDev: import.meta.env.DEV, 
+                    currentPath: window.location.pathname,
+                    importMetaUrl: import.meta.url
+                });
+                
+                // 验证 WASM 路径是否可访问
+                try {
+                    const testUrl = wasmPath + '/vision_wasm_internal.wasm';
+                    console.log('验证 WASM 文件路径:', testUrl);
+                    const testResponse = await fetch(testUrl, { method: 'HEAD' });
+                    if (!testResponse.ok) {
+                        console.error(`❌ WASM 文件不可访问: ${testUrl}，状态码: ${testResponse.status}`);
+                        throw new Error(`WASM 文件不可访问: ${testUrl} (状态码: ${testResponse.status})`);
+                    } else {
+                        console.log(`✓ WASM 文件可访问: ${testUrl}`);
+                    }
+                } catch (e) {
+                    console.error('无法验证 WASM 文件路径:', e);
+                    throw new Error(`无法访问 WASM 文件: ${wasmPath}。错误: ${e.message}`);
+                }
+                
+                console.log('开始初始化 FilesetResolver，WASM 路径:', wasmPath);
                 const vision = await FilesetResolver.forVisionTasks(wasmPath);
                 console.log('FilesetResolver 初始化完成');
                 
@@ -706,6 +744,14 @@
                 }
             } catch (error) {
                 console.error('MediaPipe 初始化错误:', error);
+                console.error('错误详情:', {
+                    message: error.message,
+                    stack: error.stack,
+                    name: error.name,
+                    wasmPath: wasmPath || '未定义',
+                    currentUrl: window.location.href,
+                    importMetaUrl: import.meta.url
+                });
                 document.getElementById('loading').style.display = 'none';
                 
                 // 检测是否为iOS设备
