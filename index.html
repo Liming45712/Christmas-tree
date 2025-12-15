@@ -779,13 +779,59 @@
                 const vision = await FilesetResolver.forVisionTasks(wasmPath);
                 console.log('FilesetResolver 初始化完成');
                 
+                // 计算模型文件路径
+                let modelPath;
+                if (import.meta.env.DEV) {
+                    // 开发模式：使用 models 目录
+                    modelPath = '/models/hand_landmarker.task';
+                } else {
+                    // 生产模式：使用复制到 dist/models 的文件
+                    try {
+                        const scriptUrl = new URL(import.meta.url);
+                        const scriptDir = scriptUrl.pathname.substring(0, scriptUrl.pathname.lastIndexOf('/'));
+                        const distRoot = scriptDir.substring(0, scriptDir.lastIndexOf('/'));
+                        modelPath = distRoot + '/models/hand_landmarker.task';
+                        console.log('使用 import.meta.url 计算的模型路径:', modelPath);
+                    } catch (e) {
+                        console.warn('无法使用 import.meta.url，回退到 window.location:', e);
+                        const currentPath = window.location.pathname;
+                        let basePath = currentPath.replace(/\/[^/]*\.html?$/, '').replace(/\/$/, '') || '';
+                        if (!basePath.startsWith('/')) {
+                            basePath = '/' + basePath;
+                        }
+                        modelPath = basePath + (basePath === '/' ? 'models/hand_landmarker.task' : '/models/hand_landmarker.task');
+                        console.log('使用 window.location 计算的模型路径:', modelPath);
+                    }
+                }
+                
+                console.log('MediaPipe 模型路径:', modelPath, { 
+                    isDev: import.meta.env.DEV, 
+                    currentPath: window.location.pathname,
+                    importMetaUrl: import.meta.url
+                });
+                
+                // 验证模型文件是否可访问
+                try {
+                    console.log('验证模型文件路径:', modelPath);
+                    const testResponse = await fetch(modelPath, { method: 'HEAD' });
+                    if (!testResponse.ok) {
+                        console.error(`❌ 模型文件不可访问: ${modelPath}，状态码: ${testResponse.status}`);
+                        throw new Error(`模型文件不可访问: ${modelPath} (状态码: ${testResponse.status})`);
+                    } else {
+                        console.log(`✓ 模型文件可访问: ${modelPath}`);
+                    }
+                } catch (e) {
+                    console.error('无法验证模型文件路径:', e);
+                    throw new Error(`无法访问模型文件: ${modelPath}。错误: ${e.message}`);
+                }
+                
                 // 添加超时控制（iOS 上可能需要更长时间）
                 const initTimeout = isIOS ? 30000 : 15000; // iOS 30秒，其他15秒
                 console.log('初始化超时时间:', initTimeout, 'ms');
                 
                 const initPromise = HandLandmarker.createFromOptions(vision, {
                 baseOptions: {
-                    modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
+                    modelAssetPath: modelPath,
                         delegate: delegate
                 },
                 runningMode: "VIDEO", numHands: 1

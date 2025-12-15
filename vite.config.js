@@ -2,7 +2,7 @@ import { defineConfig } from 'vite';
 import wasm from 'vite-plugin-wasm';
 import topLevelAwait from 'vite-plugin-top-level-await';
 import { resolve } from 'path';
-import { copyFileSync, mkdirSync, existsSync } from 'fs';
+import { copyFileSync, mkdirSync, existsSync, readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 
@@ -58,6 +58,33 @@ export default defineConfig(({ mode }) => {
         }
       }
     },
+    // 自定义插件：复制模型文件到 dist 目录
+    {
+      name: 'copy-models',
+      writeBundle() {
+        const modelsSource = resolve(__dirname, 'models');
+        const modelsDest = resolve(__dirname, 'dist/models');
+        
+        if (existsSync(modelsSource)) {
+          // 创建目标目录
+          if (!existsSync(modelsDest)) {
+            mkdirSync(modelsDest, { recursive: true });
+          }
+          
+          // 复制所有模型文件
+          const files = ['hand_landmarker.task'];
+          
+          files.forEach(file => {
+            const src = resolve(modelsSource, file);
+            const dest = resolve(modelsDest, file);
+            if (existsSync(src)) {
+              copyFileSync(src, dest);
+              console.log(`✓ 已复制 ${file} 到 dist/models/`);
+            }
+          });
+        }
+      }
+    },
     // 修复 iOS Safari WASM 加载问题的插件
     {
       name: 'fix-ios-wasm',
@@ -66,6 +93,29 @@ export default defineConfig(({ mode }) => {
           // 确保 WASM 文件使用正确的 MIME 类型
           if (req.url.endsWith('.wasm')) {
             res.setHeader('Content-Type', 'application/wasm');
+          }
+          // 确保 .task 文件使用正确的 MIME 类型
+          if (req.url.endsWith('.task')) {
+            res.setHeader('Content-Type', 'application/octet-stream');
+          }
+          next();
+        });
+      }
+    },
+    // 开发模式下提供 models 目录的静态文件服务
+    {
+      name: 'serve-models',
+      configureServer(server) {
+        server.middlewares.use((req, res, next) => {
+          if (req.url.startsWith('/models/')) {
+            const filePath = resolve(__dirname, req.url.substring(1));
+            if (existsSync(filePath)) {
+              const content = readFileSync(filePath);
+              res.setHeader('Content-Type', 'application/octet-stream');
+              res.setHeader('Content-Length', content.length);
+              res.end(content);
+              return;
+            }
           }
           next();
         });
