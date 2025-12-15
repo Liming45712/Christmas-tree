@@ -2,6 +2,12 @@ import { defineConfig } from 'vite';
 import wasm from 'vite-plugin-wasm';
 import topLevelAwait from 'vite-plugin-top-level-await';
 import { resolve } from 'path';
+import { copyFileSync, mkdirSync, existsSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 export default defineConfig(({ mode }) => {
   // 获取仓库名称，支持 GitHub Actions 和本地开发
@@ -23,7 +29,35 @@ export default defineConfig(({ mode }) => {
   base: getBase(),
   plugins: [
     wasm(),
-    topLevelAwait()
+    topLevelAwait(),
+    // 自定义插件：复制 MediaPipe WASM 文件到 dist 目录
+    {
+      name: 'copy-mediapipe-wasm',
+      writeBundle() {
+        const wasmSource = resolve(__dirname, 'node_modules/@mediapipe/tasks-vision/wasm');
+        const wasmDest = resolve(__dirname, 'dist/wasm');
+        
+        if (existsSync(wasmSource)) {
+          // 创建目标目录
+          if (!existsSync(wasmDest)) {
+            mkdirSync(wasmDest, { recursive: true });
+          }
+          
+          // 复制所有 WASM 相关文件
+          const files = ['vision_wasm_internal.js', 'vision_wasm_internal.wasm', 
+                        'vision_wasm_nosimd_internal.js', 'vision_wasm_nosimd_internal.wasm'];
+          
+          files.forEach(file => {
+            const src = resolve(wasmSource, file);
+            const dest = resolve(wasmDest, file);
+            if (existsSync(src)) {
+              copyFileSync(src, dest);
+              console.log(`✓ 已复制 ${file} 到 dist/wasm/`);
+            }
+          });
+        }
+      }
+    }
   ],
   server: {
     port: 3000,

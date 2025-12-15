@@ -626,13 +626,21 @@
                 console.log('使用 delegate:', delegate, { isIOS, isAndroid });
                 
                 // 使用 npm 包中的 wasm 文件
-                // 使用 npm 包中的 wasm 文件
                 // 在开发模式下，Vite 会自动处理路径
-                // 在生产构建时，wasm 文件会被正确复制
-                const wasmPath = import.meta.env.DEV 
-                    ? '/node_modules/@mediapipe/tasks-vision/wasm'
-                    : new URL('@mediapipe/tasks-vision/wasm', import.meta.url).href;
-                console.log('MediaPipe WASM 路径:', wasmPath, { isDev: import.meta.env.DEV });
+                // 在生产构建时，使用复制到 dist/wasm 的文件
+                let wasmPath;
+                if (import.meta.env.DEV) {
+                    // 开发模式：使用 node_modules 路径
+                    wasmPath = '/node_modules/@mediapipe/tasks-vision/wasm';
+                } else {
+                    // 生产模式：使用复制到 dist/wasm 的文件
+                    // 获取当前页面的 base 路径（考虑 GitHub Pages 的子路径）
+                    const currentPath = window.location.pathname;
+                    // 移除文件名（如 index.html），只保留目录路径
+                    const basePath = currentPath.replace(/\/[^/]*$/, '') || '/';
+                    wasmPath = basePath + '/wasm';
+                }
+                console.log('MediaPipe WASM 路径:', wasmPath, { isDev: import.meta.env.DEV, currentPath: window.location.pathname });
                 const vision = await FilesetResolver.forVisionTasks(wasmPath);
                 console.log('FilesetResolver 初始化完成');
                 
