@@ -4,6 +4,9 @@ import topLevelAwait from 'vite-plugin-top-level-await';
 import { resolve } from 'path';
 
 export default defineConfig({
+  base: process.env.GITHUB_REPOSITORY 
+    ? `/${process.env.GITHUB_REPOSITORY.split('/')[1]}/` 
+    : '/',
   plugins: [
     wasm(),
     topLevelAwait()
@@ -42,7 +45,10 @@ export default defineConfig({
         }
         warn(warning);
       }
-    }
+    },
+    // 确保 WASM 文件被正确复制
+    copyPublicDir: false,
+    assetsDir: 'assets'
   },
   optimizeDeps: {
     exclude: ['@mediapipe/tasks-vision']
