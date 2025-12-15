@@ -190,6 +190,59 @@
         <div id="loading">CRAFTING JEWELS...</div>
     </div>
  
+    <script>
+        // iOS Safari WASM 兼容性修复
+        // 修复 iOS Safari 对 WebAssembly.instantiateStreaming 的支持问题
+        (function() {
+            if (typeof WebAssembly !== 'undefined' && WebAssembly.instantiateStreaming) {
+                const originalInstantiateStreaming = WebAssembly.instantiateStreaming;
+                WebAssembly.instantiateStreaming = function(source, importObject) {
+                    // 在 iOS 上，如果 source 不是 Response 对象，先转换为 Response
+                    if (source && typeof source.then === 'function') {
+                        return source.then(function(response) {
+                            if (response instanceof Response) {
+                                return originalInstantiateStreaming.call(WebAssembly, response, importObject);
+                            } else {
+                                // 如果不是 Response，回退到使用 ArrayBuffer
+                                return response.arrayBuffer().then(function(bytes) {
+                                    return WebAssembly.instantiate(bytes, importObject);
+                                });
+                            }
+                        });
+                    } else if (source instanceof Response) {
+                        return originalInstantiateStreaming.call(WebAssembly, source, importObject);
+                    } else {
+                        // 如果 source 不是 Promise 也不是 Response，尝试转换为 ArrayBuffer
+                        if (source instanceof ArrayBuffer) {
+                            return WebAssembly.instantiate(source, importObject);
+                        } else if (source && typeof source.arrayBuffer === 'function') {
+                            return source.arrayBuffer().then(function(bytes) {
+                                return WebAssembly.instantiate(bytes, importObject);
+                            });
+                        } else {
+                            // 最后尝试：如果是 URL，先 fetch
+                            if (typeof source === 'string') {
+                                return fetch(source).then(function(response) {
+                                    if (!response.ok) {
+                                        throw new Error('Failed to fetch WASM: ' + response.status);
+                                    }
+                                    return originalInstantiateStreaming.call(WebAssembly, response, importObject).catch(function(e) {
+                                        // 如果流式编译失败，回退到 ArrayBuffer
+                                        console.warn('WASM streaming failed, falling back to ArrayBuffer:', e);
+                                        return response.arrayBuffer().then(function(bytes) {
+                                            return WebAssembly.instantiate(bytes, importObject);
+                                        });
+                                    });
+                                });
+                            }
+                        }
+                    }
+                    // 如果都不匹配，使用原始方法
+                    return originalInstantiateStreaming.call(WebAssembly, source, importObject);
+                };
+            }
+        })();
+    </script>
     <script type="module">
         import * as THREE from 'three';
         import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
@@ -679,6 +732,28 @@
                 }
                 
                 console.log('开始初始化 FilesetResolver，WASM 路径:', wasmPath);
+                
+                // iOS Safari 对 WASM 流式编译支持有限，需要特殊处理
+                if (isIOS) {
+                    // 在 iOS 上，确保 WASM 文件可以正确加载
+                    // 先测试加载一个 WASM 文件，确保路径和 MIME 类型正确
+                    try {
+                        const testWasmUrl = wasmPath + '/vision_wasm_internal.wasm';
+                        const testResponse = await fetch(testWasmUrl);
+                        if (!testResponse.ok) {
+                            throw new Error(`无法加载 WASM 文件: ${testWasmUrl} (状态码: ${testResponse.status})`);
+                        }
+                        const contentType = testResponse.headers.get('content-type');
+                        console.log('WASM 文件 Content-Type:', contentType);
+                        if (contentType && !contentType.includes('wasm') && !contentType.includes('octet-stream')) {
+                            console.warn('WASM 文件可能使用了错误的 MIME 类型:', contentType);
+                        }
+                    } catch (e) {
+                        console.error('iOS WASM 文件测试失败:', e);
+                        throw new Error(`iOS 上无法访问 WASM 文件: ${e.message}`);
+                    }
+                }
+                
                 const vision = await FilesetResolver.forVisionTasks(wasmPath);
                 console.log('FilesetResolver 初始化完成');
                 

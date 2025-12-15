@@ -57,6 +57,19 @@ export default defineConfig(({ mode }) => {
           });
         }
       }
+    },
+    // 修复 iOS Safari WASM 加载问题的插件
+    {
+      name: 'fix-ios-wasm',
+      configureServer(server) {
+        server.middlewares.use((req, res, next) => {
+          // 确保 WASM 文件使用正确的 MIME 类型
+          if (req.url.endsWith('.wasm')) {
+            res.setHeader('Content-Type', 'application/wasm');
+          }
+          next();
+        });
+      }
     }
   ],
   server: {
