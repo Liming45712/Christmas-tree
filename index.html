@@ -686,6 +686,10 @@
         let cameraStream = null;
         
         async function setupMediaPipe() {
+            // 在函数作用域顶部声明变量，确保在 catch 块中可用
+            let wasmPath = undefined;
+            let modelPath = undefined;
+            
             try {
                 // 检测是否为iOS设备
                 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
@@ -703,7 +707,6 @@
                 // 使用 npm 包中的 wasm 文件
                 // 在开发模式下，Vite 会自动处理路径
                 // 在生产构建时，使用复制到 dist/wasm 的文件
-                let wasmPath;
                 if (import.meta.env.DEV) {
                     // 开发模式：使用 node_modules 路径
                     wasmPath = '/node_modules/@mediapipe/tasks-vision/wasm';
@@ -780,7 +783,6 @@
                 console.log('FilesetResolver 初始化完成');
                 
                 // 计算模型文件路径
-                let modelPath;
                 if (import.meta.env.DEV) {
                     // 开发模式：使用 models 目录
                     modelPath = '/models/hand_landmarker.task';
@@ -892,6 +894,7 @@
                     stack: error.stack,
                     name: error.name,
                     wasmPath: wasmPath || '未定义',
+                    modelPath: modelPath || '未定义',
                     currentUrl: window.location.href,
                     importMetaUrl: import.meta.url
                 });
