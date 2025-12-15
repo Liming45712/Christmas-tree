@@ -197,48 +197,70 @@
             if (typeof WebAssembly !== 'undefined' && WebAssembly.instantiateStreaming) {
                 const originalInstantiateStreaming = WebAssembly.instantiateStreaming;
                 WebAssembly.instantiateStreaming = function(source, importObject) {
-                    // 在 iOS 上，如果 source 不是 Response 对象，先转换为 Response
+                    // 检查 source 是否是 Promise<Response>
                     if (source && typeof source.then === 'function') {
                         return source.then(function(response) {
                             if (response instanceof Response) {
-                                return originalInstantiateStreaming.call(WebAssembly, response, importObject);
+                                // 尝试使用流式编译，失败则回退到 ArrayBuffer
+                                return originalInstantiateStreaming.call(WebAssembly, response, importObject).catch(function(e) {
+                                    console.warn('WASM streaming failed, falling back to ArrayBuffer:', e);
+                                    // 克隆 response 因为 response 只能读取一次
+                                    return response.clone().arrayBuffer().then(function(bytes) {
+                                        return WebAssembly.instantiate(bytes, importObject);
+                                    });
+                                });
                             } else {
                                 // 如果不是 Response，回退到使用 ArrayBuffer
+                                if (response && typeof response.arrayBuffer === 'function') {
+                                    return response.arrayBuffer().then(function(bytes) {
+                                        return WebAssembly.instantiate(bytes, importObject);
+                                    });
+                                } else {
+                                    throw new Error('Invalid WASM source: expected Response or Promise<Response>');
+                                }
+                            }
+                        });
+                    } 
+                    // 检查 source 是否是 Response
+                    else if (source instanceof Response) {
+                        return originalInstantiateStreaming.call(WebAssembly, source, importObject).catch(function(e) {
+                            console.warn('WASM streaming failed, falling back to ArrayBuffer:', e);
+                            // 克隆 response 因为 response 只能读取一次
+                            return source.clone().arrayBuffer().then(function(bytes) {
+                                return WebAssembly.instantiate(bytes, importObject);
+                            });
+                        });
+                    } 
+                    // 如果是字符串 URL，先 fetch
+                    else if (typeof source === 'string') {
+                        return fetch(source).then(function(response) {
+                            if (!response.ok) {
+                                throw new Error('Failed to fetch WASM: ' + response.status);
+                            }
+                            return originalInstantiateStreaming.call(WebAssembly, response, importObject).catch(function(e) {
+                                // 如果流式编译失败，回退到 ArrayBuffer
+                                console.warn('WASM streaming failed, falling back to ArrayBuffer:', e);
                                 return response.arrayBuffer().then(function(bytes) {
                                     return WebAssembly.instantiate(bytes, importObject);
                                 });
-                            }
-                        });
-                    } else if (source instanceof Response) {
-                        return originalInstantiateStreaming.call(WebAssembly, source, importObject);
-                    } else {
-                        // 如果 source 不是 Promise 也不是 Response，尝试转换为 ArrayBuffer
-                        if (source instanceof ArrayBuffer) {
-                            return WebAssembly.instantiate(source, importObject);
-                        } else if (source && typeof source.arrayBuffer === 'function') {
-                            return source.arrayBuffer().then(function(bytes) {
-                                return WebAssembly.instantiate(bytes, importObject);
                             });
-                        } else {
-                            // 最后尝试：如果是 URL，先 fetch
-                            if (typeof source === 'string') {
-                                return fetch(source).then(function(response) {
-                                    if (!response.ok) {
-                                        throw new Error('Failed to fetch WASM: ' + response.status);
-                                    }
-                                    return originalInstantiateStreaming.call(WebAssembly, response, importObject).catch(function(e) {
-                                        // 如果流式编译失败，回退到 ArrayBuffer
-                                        console.warn('WASM streaming failed, falling back to ArrayBuffer:', e);
-                                        return response.arrayBuffer().then(function(bytes) {
-                                            return WebAssembly.instantiate(bytes, importObject);
-                                        });
-                                    });
-                                });
-                            }
-                        }
+                        });
                     }
-                    // 如果都不匹配，使用原始方法
-                    return originalInstantiateStreaming.call(WebAssembly, source, importObject);
+                    // 如果是 ArrayBuffer，直接使用
+                    else if (source instanceof ArrayBuffer) {
+                        return Promise.resolve(WebAssembly.instantiate(source, importObject));
+                    }
+                    // 如果有 arrayBuffer 方法，使用它
+                    else if (source && typeof source.arrayBuffer === 'function') {
+                        return source.arrayBuffer().then(function(bytes) {
+                            return WebAssembly.instantiate(bytes, importObject);
+                        });
+                    }
+                    // 如果都不匹配，抛出错误而不是调用原始方法
+                    else {
+                        console.error('Invalid WASM source type:', typeof source, source);
+                        return Promise.reject(new Error('WebAssembly.instantiateStreaming: first argument must be a Response or Promise<Response>, got: ' + typeof source));
+                    }
                 };
             }
         })();
