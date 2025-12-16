@@ -99,6 +99,25 @@
         #loading {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
             color: #d4af37; font-size: 1.2rem; letter-spacing: 3px; z-index: 10; pointer-events: none; transition: opacity 0.5s;
+            text-align: center; width: 80%; max-width: 400px;
+        }
+        
+        #loading-text {
+            margin-bottom: 20px;
+        }
+        
+        #progress-container {
+            width: 100%; height: 6px; background: rgba(212, 175, 55, 0.2); 
+            border-radius: 3px; overflow: hidden; margin-top: 15px;
+        }
+        
+        #progress-bar {
+            height: 100%; background: linear-gradient(90deg, #d4af37, #ffd700); 
+            width: 0%; transition: width 0.3s ease; border-radius: 3px;
+        }
+        
+        #progress-percent {
+            margin-top: 10px; font-size: 0.9rem; color: #d4af37; opacity: 0.8;
         }
  
         /* 全屏按钮 */
@@ -187,7 +206,13 @@
             <button id="start-camera-btn" onclick="startCamera()" style="display: none;">启动摄像头</button>
             <input type="file" id="file-input" multiple accept="image/*">
         </div>
-        <div id="loading">CRAFTING JEWELS...</div>
+        <div id="loading">
+            <div id="loading-text">CRAFTING JEWELS...</div>
+            <div id="progress-container">
+                <div id="progress-bar"></div>
+            </div>
+            <div id="progress-percent">0%</div>
+        </div>
     </div>
  
     <script>
@@ -685,6 +710,126 @@
         let handLandmarker = null;
         let cameraStream = null;
         
+        // 更新进度条
+        function updateProgress(percent, text) {
+            const progressBar = document.getElementById('progress-bar');
+            const progressPercent = document.getElementById('progress-percent');
+            const loadingText = document.getElementById('loading-text');
+            
+            if (progressBar) progressBar.style.width = percent + '%';
+            if (progressPercent) progressPercent.textContent = Math.round(percent) + '%';
+            if (loadingText && text) loadingText.textContent = text;
+        }
+        
+        // 计算资源路径
+        function calculateResourcePaths() {
+            let wasmPath, modelPath;
+            
+            if (import.meta.env.DEV) {
+                wasmPath = '/node_modules/@mediapipe/tasks-vision/wasm';
+                modelPath = '/models/hand_landmarker.task';
+            } else {
+                try {
+                    const scriptUrl = new URL(import.meta.url);
+                    const scriptDir = scriptUrl.pathname.substring(0, scriptUrl.pathname.lastIndexOf('/'));
+                    const distRoot = scriptDir.substring(0, scriptDir.lastIndexOf('/'));
+                    wasmPath = distRoot + '/wasm';
+                    modelPath = distRoot + '/models/hand_landmarker.task';
+                } catch (e) {
+                    const currentPath = window.location.pathname;
+                    let basePath = currentPath.replace(/\/[^/]*\.html?$/, '').replace(/\/$/, '') || '';
+                    if (!basePath.startsWith('/')) {
+                        basePath = '/' + basePath;
+                    }
+                    wasmPath = basePath + (basePath === '/' ? 'wasm' : '/wasm');
+                    modelPath = basePath + (basePath === '/' ? 'models/hand_landmarker.task' : '/models/hand_landmarker.task');
+                }
+            }
+            
+            return { wasmPath, modelPath };
+        }
+        
+        // 预加载资源（WASM 文件和模型文件）
+        async function preloadResources() {
+            updateProgress(0, '正在加载资源...');
+            
+            const { wasmPath, modelPath } = calculateResourcePaths();
+            const resources = [];
+            
+            // WASM 文件列表
+            const wasmFiles = [
+                'vision_wasm_internal.js',
+                'vision_wasm_internal.wasm',
+                'vision_wasm_nosimd_internal.js',
+                'vision_wasm_nosimd_internal.wasm'
+            ];
+            
+            // 添加所有 WASM 文件
+            wasmFiles.forEach(file => {
+                resources.push({
+                    url: wasmPath + '/' + file,
+                    name: file,
+                    type: 'wasm'
+                });
+            });
+            
+            // 添加模型文件
+            resources.push({
+                url: modelPath,
+                name: 'hand_landmarker.task',
+                type: 'model'
+            });
+            
+            console.log('开始预加载资源，共', resources.length, '个文件');
+            console.log('资源路径:', { wasmPath, modelPath });
+            
+            let loaded = 0;
+            const total = resources.length;
+            
+            // 并行加载所有资源
+            const loadPromises = resources.map((resource, index) => {
+                return fetch(resource.url, { method: 'GET', cache: 'force-cache' })
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error(`无法加载 ${resource.name}: ${response.status}`);
+                        }
+                        // 对于 WASM 文件，读取内容以确保缓存
+                        if (resource.type === 'wasm') {
+                            return response.arrayBuffer().then(buffer => {
+                                loaded++;
+                                const percent = (loaded / total) * 100;
+                                updateProgress(percent, `正在加载 ${resource.name}... (${loaded}/${total})`);
+                                console.log(`✓ 已预加载: ${resource.name} (${(buffer.byteLength / 1024).toFixed(1)} KB)`);
+                                return { resource, buffer };
+                            });
+                        } else {
+                            // 对于模型文件，也读取内容
+                            return response.arrayBuffer().then(buffer => {
+                                loaded++;
+                                const percent = (loaded / total) * 100;
+                                updateProgress(percent, `正在加载 ${resource.name}... (${loaded}/${total})`);
+                                console.log(`✓ 已预加载: ${resource.name} (${(buffer.byteLength / 1024 / 1024).toFixed(1)} MB)`);
+                                return { resource, buffer };
+                            });
+                        }
+                    })
+                    .catch(error => {
+                        console.error(`❌ 预加载失败: ${resource.name}`, error);
+                        throw error;
+                    });
+            });
+            
+            try {
+                await Promise.all(loadPromises);
+                updateProgress(100, '资源加载完成，正在初始化...');
+                console.log('✓ 所有资源预加载完成');
+                return { wasmPath, modelPath };
+            } catch (error) {
+                console.error('资源预加载失败:', error);
+                throw error;
+            }
+        }
+        
         async function setupMediaPipe() {
             // 在函数作用域顶部声明变量，确保在 catch 块中可用
             let wasmPath = undefined;
@@ -704,35 +849,10 @@
                 const delegate = (isIOS || isAndroid) ? "CPU" : "GPU";
                 console.log('使用 delegate:', delegate, { isIOS, isAndroid });
                 
-                // 使用 npm 包中的 wasm 文件
-                // 在开发模式下，Vite 会自动处理路径
-                // 在生产构建时，使用复制到 dist/wasm 的文件
-                if (import.meta.env.DEV) {
-                    // 开发模式：使用 node_modules 路径
-                    wasmPath = '/node_modules/@mediapipe/tasks-vision/wasm';
-                } else {
-                    // 生产模式：使用复制到 dist/wasm 的文件
-                    // 使用 import.meta.url 获取当前脚本的路径，然后计算相对路径
-                    try {
-                        const scriptUrl = new URL(import.meta.url);
-                        // 获取脚本所在目录（通常是 assets/）
-                        const scriptDir = scriptUrl.pathname.substring(0, scriptUrl.pathname.lastIndexOf('/'));
-                        // 回到 dist 根目录，然后进入 wasm 目录
-                        const distRoot = scriptDir.substring(0, scriptDir.lastIndexOf('/'));
-                        wasmPath = distRoot + '/wasm';
-                        console.log('使用 import.meta.url 计算的 WASM 路径:', wasmPath);
-                    } catch (e) {
-                        // 如果 import.meta.url 不可用，使用 window.location
-                        console.warn('无法使用 import.meta.url，回退到 window.location:', e);
-                        const currentPath = window.location.pathname;
-                        let basePath = currentPath.replace(/\/[^/]*\.html?$/, '').replace(/\/$/, '') || '';
-                        if (!basePath.startsWith('/')) {
-                            basePath = '/' + basePath;
-                        }
-                        wasmPath = basePath + (basePath === '/' ? 'wasm' : '/wasm');
-                        console.log('使用 window.location 计算的 WASM 路径:', wasmPath);
-                    }
-                }
+                // 使用预加载时计算的路径
+                const paths = calculateResourcePaths();
+                wasmPath = paths.wasmPath;
+                modelPath = paths.modelPath;
                 
                 console.log('MediaPipe WASM 路径:', wasmPath, { 
                     isDev: import.meta.env.DEV, 
@@ -781,30 +901,6 @@
                 
                 const vision = await FilesetResolver.forVisionTasks(wasmPath);
                 console.log('FilesetResolver 初始化完成');
-                
-                // 计算模型文件路径
-                if (import.meta.env.DEV) {
-                    // 开发模式：使用 models 目录
-                    modelPath = '/models/hand_landmarker.task';
-                } else {
-                    // 生产模式：使用复制到 dist/models 的文件
-                    try {
-                        const scriptUrl = new URL(import.meta.url);
-                        const scriptDir = scriptUrl.pathname.substring(0, scriptUrl.pathname.lastIndexOf('/'));
-                        const distRoot = scriptDir.substring(0, scriptDir.lastIndexOf('/'));
-                        modelPath = distRoot + '/models/hand_landmarker.task';
-                        console.log('使用 import.meta.url 计算的模型路径:', modelPath);
-                    } catch (e) {
-                        console.warn('无法使用 import.meta.url，回退到 window.location:', e);
-                        const currentPath = window.location.pathname;
-                        let basePath = currentPath.replace(/\/[^/]*\.html?$/, '').replace(/\/$/, '') || '';
-                        if (!basePath.startsWith('/')) {
-                            basePath = '/' + basePath;
-                        }
-                        modelPath = basePath + (basePath === '/' ? 'models/hand_landmarker.task' : '/models/hand_landmarker.task');
-                        console.log('使用 window.location 计算的模型路径:', modelPath);
-                    }
-                }
                 
                 console.log('MediaPipe 模型路径:', modelPath, { 
                     isDev: import.meta.env.DEV, 
@@ -1622,7 +1718,19 @@
  
         initThree();
         animate();
-        setupMediaPipe();
+        
+        // 先预加载资源，然后初始化 MediaPipe
+        (async () => {
+            try {
+                updateProgress(0, '准备加载资源...');
+                await preloadResources();
+                updateProgress(100, '正在初始化 MediaPipe...');
+                await setupMediaPipe();
+            } catch (error) {
+                console.error('初始化失败:', error);
+                updateProgress(0, '加载失败，请刷新页面重试');
+            }
+        })();
     </script>
 </body>
 </html>
