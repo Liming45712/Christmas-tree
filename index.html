@@ -299,16 +299,39 @@
         import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
         import VConsole from 'vconsole';
  
-        // --- Config ---
-        const CONFIG = {
-            goldCount: 600,     // 金球
-            silverCount: 600,   // 银方块
-            gemCount: 400,      // 红宝石
-            emeraldCount: 400,  // 祖母绿
-            dustCount: 1200,    // 氛围粒子
-            treeHeight: 75,
-            maxRadius: 30
+        // 检测设备类型以优化性能
+        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
+                     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        const isAndroid = /Android/.test(navigator.userAgent);
+        const isMobile = isIOS || isAndroid;
+        
+        // 根据设备性能调整配置
+        // 移动端大幅降低粒子数量以提高性能
+        const getConfig = () => {
+            if (isMobile) {
+                return {
+                    goldCount: 300,     // 金球（移动端减半）
+                    silverCount: 300,   // 银方块（移动端减半）
+                    gemCount: 200,      // 红宝石（移动端减半）
+                    emeraldCount: 200,  // 祖母绿（移动端减半）
+                    dustCount: 400,     // 氛围粒子（移动端大幅减少）
+                    treeHeight: 75,
+                    maxRadius: 30
+                };
+            } else {
+                return {
+                    goldCount: 600,     // 金球
+                    silverCount: 600,   // 银方块
+                    gemCount: 400,      // 红宝石
+                    emeraldCount: 400,  // 祖母绿
+                    dustCount: 1200,    // 氛围粒子
+                    treeHeight: 75,
+                    maxRadius: 30
+                };
+            }
         };
+        
+        const CONFIG = getConfig();
  
         const STATE = { TREE: 'tree', SCATTER: 'scatter', ZOOM: 'zoom' };
         let currentState = STATE.TREE;
@@ -362,20 +385,27 @@
             camera = new THREE.PerspectiveCamera(50, wrapper.clientWidth / wrapper.clientHeight, 0.1, 1000);
             camera.position.set(0, 0, 110);
  
-            // 检测设备类型以优化性能
-            const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || 
-                                  (navigator.maxTouchPoints && navigator.maxTouchPoints > 2);
-            
             // 移动端降低抗锯齿和像素比以提高性能
-            const useAntialias = !isMobileDevice;
-            const maxPixelRatio = isMobileDevice ? 1.0 : 1.5;
+            const useAntialias = !isMobile;
+            const maxPixelRatio = isMobile ? 1.0 : 1.5;
             
             renderer = new THREE.WebGLRenderer({ 
                 antialias: useAntialias, 
-                powerPreference: "high-performance" 
+                powerPreference: "high-performance",
+                // 移动端优化设置
+                precision: isMobile ? "mediump" : "highp",
+                stencil: false,
+                depth: true
             });
             renderer.setSize(wrapper.clientWidth, wrapper.clientHeight);
             renderer.setPixelRatio(Math.min(window.devicePixelRatio, maxPixelRatio));
+            
+            // 移动端优化渲染设置
+            if (isMobile) {
+                renderer.shadowMap.enabled = false; // 移动端禁用阴影
+                renderer.sortObjects = false; // 禁用对象排序以提高性能
+            }
+            
             renderer.toneMapping = THREE.ACESFilmicToneMapping;
             renderer.toneMappingExposure = 1.0;
             container.appendChild(renderer.domElement);
@@ -400,16 +430,34 @@
             blueLight.position.set(-30, -20, 30);
             scene.add(blueLight);
              
-            // Bloom
+            // Bloom - 移动端降低效果强度
             const renderScene = new RenderPass(scene, camera);
-            const bloomPass = new UnrealBloomPass(new THREE.Vector2(wrapper.clientWidth, wrapper.clientHeight), 1.5, 0.4, 0.85);
-            bloomPass.threshold = 0.4;
-            bloomPass.strength = 0.6;
-            bloomPass.radius = 0.5;
- 
-            composer = new EffectComposer(renderer);
-            composer.addPass(renderScene);
-            composer.addPass(bloomPass);
+            
+            if (isMobile) {
+                // 移动端：降低Bloom分辨率，减少强度
+                const bloomResolution = new THREE.Vector2(
+                    Math.floor(wrapper.clientWidth * 0.5),
+                    Math.floor(wrapper.clientHeight * 0.5)
+                );
+                const bloomPass = new UnrealBloomPass(bloomResolution, 1.5, 0.4, 0.85);
+                bloomPass.threshold = 0.6; // 提高阈值，减少处理
+                bloomPass.strength = 0.3;  // 降低强度
+                bloomPass.radius = 0.3;   // 降低半径
+                
+                composer = new EffectComposer(renderer);
+                composer.addPass(renderScene);
+                composer.addPass(bloomPass);
+            } else {
+                // PC端：完整效果
+                const bloomPass = new UnrealBloomPass(new THREE.Vector2(wrapper.clientWidth, wrapper.clientHeight), 1.5, 0.4, 0.85);
+                bloomPass.threshold = 0.4;
+                bloomPass.strength = 0.6;
+                bloomPass.radius = 0.5;
+                
+                composer = new EffectComposer(renderer);
+                composer.addPass(renderScene);
+                composer.addPass(bloomPass);
+            }
  
             createMaterialsAndMeshes();
             createDust();
@@ -544,31 +592,61 @@
         }
  
         // --- Animation Loop ---
-        // 性能优化：检测设备类型
-        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
-                     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-        const isAndroid = /Android/.test(navigator.userAgent);
-        const isMobile = isIOS || isAndroid;
-        
         // 移动端降低更新频率
         let frameSkip = 0;
-        const skipFrames = isMobile ? 1 : 0; // 移动端每2帧更新一次
+        const skipFrames = isMobile ? 2 : 0; // 移动端每3帧更新一次（更激进）
+        
+        // 性能监控（仅开发模式）
+        let lastFrameTime = performance.now();
+        let frameCount = 0;
+        let fps = 60;
         
         function animate() {
             requestAnimationFrame(animate);
+            
+            const currentTime = performance.now();
+            const deltaTime = currentTime - lastFrameTime;
+            lastFrameTime = currentTime;
+            
+            // 计算FPS（每60帧更新一次）
+            frameCount++;
+            if (frameCount % 60 === 0) {
+                fps = Math.round(1000 / (deltaTime || 16.67));
+                if (fps < 30 && isMobile) {
+                    console.warn('性能警告: FPS低于30，考虑进一步降低质量');
+                }
+            }
+            
             time += 0.01;
- 
+
             frameSkip++;
             const shouldUpdate = frameSkip % (skipFrames + 1) === 0;
 
+            // 移动端：分批更新以减少单帧计算量
             if (shouldUpdate || !isMobile) {
-            updateInstancedMesh(goldMesh, logicData.gold);
-            updateInstancedMesh(silverMesh, logicData.silver);
-            updateInstancedMesh(gemMesh, logicData.gem);
-            updateInstancedMesh(emeraldMesh, logicData.emerald);
- 
-            updateDust();
-            updatePhotos();
+                if (isMobile) {
+                    // 移动端：每帧只更新部分网格
+                    const updateCycle = Math.floor(frameSkip / (skipFrames + 1)) % 4;
+                    if (updateCycle === 0) {
+                        updateInstancedMesh(goldMesh, logicData.gold);
+                        updateInstancedMesh(silverMesh, logicData.silver);
+                    } else if (updateCycle === 1) {
+                        updateInstancedMesh(gemMesh, logicData.gem);
+                        updateInstancedMesh(emeraldMesh, logicData.emerald);
+                    } else if (updateCycle === 2) {
+                        updateDust();
+                    } else {
+                        updatePhotos();
+                    }
+                } else {
+                    // PC端：每帧更新所有
+                    updateInstancedMesh(goldMesh, logicData.gold);
+                    updateInstancedMesh(silverMesh, logicData.silver);
+                    updateInstancedMesh(gemMesh, logicData.gem);
+                    updateInstancedMesh(emeraldMesh, logicData.emerald);
+                    updateDust();
+                    updatePhotos();
+                }
             }
              
             // 星星
@@ -620,25 +698,35 @@
                 mainGroup.rotation.y += 0.003;
                 mainGroup.rotation.x *= 0.95;
             }
- 
-            composer.render();
+
+            // 移动端：降低渲染频率（每2帧渲染一次）
+            if (!isMobile || frameSkip % 2 === 0) {
+                composer.render();
+            }
         }
  
         function updateInstancedMesh(mesh, dataArray) {
+            // 移动端：减少计算精度
+            const lerpSpeed = isMobile ? 0.1 : 0.08; // 移动端更快收敛，减少计算
+            const sinAmplitude = isMobile ? 0.003 : 0.005; // 移动端减少浮动幅度
+            
             for (let i = 0; i < dataArray.length; i++) {
                 const item = dataArray[i];
                 let target = currentState === STATE.TREE ? item.treePos : item.scatterPos;
                 if(currentState === STATE.ZOOM) target = item.scatterPos;
-                 
-                if (currentState === STATE.SCATTER) item.currentPos.y += Math.sin(time + i)*0.005;
- 
-                item.currentPos.lerp(target, 0.08);
+                
+                // 移动端：减少浮点计算
+                if (currentState === STATE.SCATTER && !isMobile) {
+                    item.currentPos.y += Math.sin(time + i) * sinAmplitude;
+                }
+
+                item.currentPos.lerp(target, lerpSpeed);
                 item.rotation.x += item.rotSpeed.x;
                 item.rotation.y += item.rotSpeed.y;
- 
+
                 let s = item.scale;
                 if(currentState === STATE.ZOOM) s = item.scale * 0.6; 
- 
+
                 dummy.position.copy(item.currentPos);
                 dummy.rotation.copy(item.rotation);
                 dummy.scale.setScalar(s);
@@ -650,19 +738,35 @@
  
         function updateDust() {
             const positions = dustSystem.geometry.attributes.position.array;
+            // 移动端：减少计算精度，使用更快的lerp速度
+            const lerpSpeed = isMobile ? 0.08 : 0.05;
+            const moveSpeed = isMobile ? 0.03 : 0.05;
+            
             for(let i=0; i<logicData.dust.length; i++) {
                 const item = logicData.dust[i];
                 let target = currentState === STATE.TREE ? item.treePos : item.scatterPos;
-                if(currentState !== STATE.TREE) item.currentPos.lerp(target, 0.05);
-                else {
-                    item.currentPos.y += 0.05;
+                if(currentState !== STATE.TREE) {
+                    item.currentPos.lerp(target, lerpSpeed);
+                } else {
+                    item.currentPos.y += moveSpeed;
                     if(item.currentPos.y > CONFIG.treeHeight/2) item.currentPos.y = -CONFIG.treeHeight/2;
-                    const normH = (item.currentPos.y + CONFIG.treeHeight/2) / CONFIG.treeHeight;
-                    const rMax = CONFIG.maxRadius * (1-normH) + 2;
-                    const rCurr = Math.sqrt(item.currentPos.x**2 + item.currentPos.z**2);
-                    if(rCurr > rMax) {
-                        item.currentPos.x *= 0.98;
-                        item.currentPos.z *= 0.98;
+                    // 移动端：简化距离计算，避免开方运算
+                    if (!isMobile) {
+                        const normH = (item.currentPos.y + CONFIG.treeHeight/2) / CONFIG.treeHeight;
+                        const rMax = CONFIG.maxRadius * (1-normH) + 2;
+                        const rCurr = Math.sqrt(item.currentPos.x**2 + item.currentPos.z**2);
+                        if(rCurr > rMax) {
+                            item.currentPos.x *= 0.98;
+                            item.currentPos.z *= 0.98;
+                        }
+                    } else {
+                        // 移动端：使用简化的边界检查
+                        const rMax = CONFIG.maxRadius + 2;
+                        const rCurrSq = item.currentPos.x**2 + item.currentPos.z**2;
+                        if(rCurrSq > rMax * rMax) {
+                            item.currentPos.x *= 0.98;
+                            item.currentPos.z *= 0.98;
+                        }
                     }
                 }
                 positions[i*3] = item.currentPos.x;
